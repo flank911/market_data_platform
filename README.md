@@ -2,6 +2,57 @@
 
 Deterministic, reproducible pipeline for Binance BTCUSDT OHLCV with idempotent storage in ClickHouse and a read-only FastAPI.
 
+## Stage 2 (Research-grade) — Datasets & Versioned Features
+
+- Dataset is an immutable snapshot identified by `dataset_id`
+- Features are versioned and never overwritten
+- Experiments reference `dataset_id` only
+- Multi-symbol support (registry via `SYMBOLS`)
+- Deterministic Parquet export with checksum and quality gate
+
+### Dataset contract
+Dataset metadata is stored in ClickHouse table `datasets`:
+
+- `dataset_id String` (e.g., `ds_btcusdt_1m_20200101_20220101_v1`)
+- `symbol String`
+- `timeframe UInt16` (minutes)
+- `date_from DateTime` / `date_to DateTime`
+- `feature_set String` (JSON with versions/params)
+- `checksum String` (content hash of candles+features)
+- `created_at DateTime`
+
+Immutable rule: any change produces a new `dataset_id`.
+
+### Build a dataset (Python)
+```bash
+python -c "from datetime import datetime, timezone as tz; \
+from market_data.config.settings import load_settings; \
+from market_data.storage.clickhouse_client import ClickHouseClient; \
+from market_data.datasets import DatasetBuilder; \
+s=load_settings(); \
+ch=ClickHouseClient(host=s.clickhouse.host,port=s.clickhouse.port,username=s.clickhouse.username,password=s.clickhouse.password,database=s.clickhouse.database,secure=s.clickhouse.secure); \
+b=DatasetBuilder(s, ch); \
+meta, df_c, df_f = b.build(symbol='BTCUSDT', timeframe='1m', date_from=datetime(2020,1,1,tzinfo=tz.utc), date_to=datetime(2022,1,1,tzinfo=tz.utc), feature_set={'atr':'v1','volatility':{'version':'v1','window':30},'trend':{'version':'v1','short_span':12,'long_span':26},'sessions':'v1','volatility_regime':'v1','trend_regime':'v1'}); \
+print(meta)"
+```
+
+### Export to Parquet
+```bash
+python -m market_data.export.export_dataset --dataset-id ds_btcusdt_1m_20200101_20220101_v1 --format parquet
+```
+Output directory:
+```
+data/exports/<dataset_id>/
+├── metadata.yaml
+├── candles.parquet
+└── features.parquet
+```
+
+### API (dataset-centric)
+- GET `/datasets`
+- GET `/datasets/{id}`
+- GET `/datasets/{id}/export`
+
 ## Architecture
 - Fetcher → Normalizer → Validator → Aggregator → Feature Builder → Storage → API
 - Scope (hard-limited): exchange `binance`, symbol `BTCUSDT`, base TF `1m`, aggregated TFs `5m,15m,1h,4h,1d`
@@ -54,6 +105,13 @@ BACKOFF_MAX_S=8.0
 # Feature thresholds (% ATR of price)
 VOL_LOW_ATR_PCT=0.5
 VOL_MID_ATR_PCT=1.5
+
+# Quality gate thresholds (%)
+QUALITY_MAX_GAP_PCT=0.5
+QUALITY_MAX_NAN_FEATURE_PCT=0.5
+
+# Multi-symbol registry (Stage 2)
+SYMBOLS=BTCUSDT,ETHUSDT
 ```
 
 ## One-command startup

@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import List, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import clickhouse_connect
 
@@ -30,8 +30,118 @@ class ClickHouseClient:
 
     def create_tables(self, ddl_sql: str) -> None:
         logger.info("Ensuring ClickHouse tables exist")
-        self.client.command(ddl_sql)
+        statements = [s.strip() for s in ddl_sql.split(";") if s.strip()]
+        for stmt in statements:
+            self.client.command(stmt)
         logger.info("DDL executed")
+
+    # =========================
+    # Dataset metadata methods
+    # =========================
+    def dataset_exists(self, dataset_id: str) -> bool:
+        query = """
+            SELECT count() 
+            FROM datasets 
+            WHERE dataset_id = {dataset_id:String}
+        """
+        res = self.client.query(query, parameters={"dataset_id": dataset_id})
+        return int(res.result_rows[0][0]) > 0
+
+    def insert_dataset_metadata(
+        self,
+        *,
+        dataset_id: str,
+        symbol: str,
+        timeframe: int,
+        date_from: datetime,
+        date_to: datetime,
+        feature_set_serialized: str,
+        checksum: str,
+        created_at: datetime,
+    ) -> None:
+        if self.dataset_exists(dataset_id):
+            raise ValueError(f"Dataset already exists: {dataset_id}")
+        self.client.insert(
+            "datasets",
+            [
+                (
+                    dataset_id,
+                    symbol,
+                    int(timeframe),
+                    date_from,
+                    date_to,
+                    feature_set_serialized,
+                    checksum,
+                    created_at,
+                )
+            ],
+            column_names=[
+                "dataset_id",
+                "symbol",
+                "timeframe",
+                "date_from",
+                "date_to",
+                "feature_set",
+                "checksum",
+                "created_at",
+            ],
+            settings={"async_insert": 0, "wait_for_async_insert": 1},
+        )
+
+    def list_datasets(self, *, symbol: Optional[str] = None, limit: int = 1000) -> List[Dict[str, object]]:
+        where = ""
+        params: Dict[str, object] = {}
+        if symbol:
+            where = "WHERE symbol = {symbol:String}"
+            params["symbol"] = symbol
+        query = f"""
+            SELECT
+              dataset_id, symbol, timeframe, date_from, date_to, feature_set, checksum, created_at
+            FROM datasets
+            {where}
+            ORDER BY created_at DESC
+            LIMIT {{limit:Int32}}
+        """
+        params["limit"] = int(limit)
+        res = self.client.query(query, parameters=params)
+        out: List[Dict[str, object]] = []
+        for r in res.result_rows:
+            out.append(
+                {
+                    "dataset_id": r[0],
+                    "symbol": r[1],
+                    "timeframe": r[2],
+                    "date_from": r[3],
+                    "date_to": r[4],
+                    "feature_set": r[5],
+                    "checksum": r[6],
+                    "created_at": r[7],
+                }
+            )
+        return out
+
+    def get_dataset(self, dataset_id: str) -> Optional[Dict[str, object]]:
+        query = """
+            SELECT
+              dataset_id, symbol, timeframe, date_from, date_to, feature_set, checksum, created_at
+            FROM datasets
+            WHERE dataset_id = {dataset_id:String}
+            LIMIT 1
+        """
+        res = self.client.query(query, parameters={"dataset_id": dataset_id})
+        if not res.result_rows:
+            return None
+        r = res.result_rows[0]
+        return {
+            "dataset_id": r[0],
+            "symbol": r[1],
+            "timeframe": r[2],
+            "date_from": r[3],
+            "date_to": r[4],
+            "feature_set": r[5],
+            "checksum": r[6],
+            "created_at": r[7],
+        }
 
     def _rows_from_candles(self, candles: Sequence[Candle]) -> List[Tuple]:
         rows: List[Tuple] = []
@@ -154,5 +264,27 @@ class ClickHouseClient:
         params = {"symbol": symbol, "timeframe": timeframe, "from": ts_from, "to": ts_to}
         result = self.client.query(query, parameters=params)
         return result.result_rows
+
+    def select_ohlcv(
+        self,
+        *,
+        symbol: str,
+        timeframe: int,
+        ts_from: datetime,
+        ts_to: datetime,
+    ) -> List[Tuple]:
+        query = """
+            SELECT
+              ts, open, high, low, close, volume
+            FROM market_candles
+            WHERE symbol = {symbol:String}
+              AND timeframe = {timeframe:UInt16}
+              AND ts >= {from:DateTime}
+              AND ts <= {to:DateTime}
+            ORDER BY ts ASC
+        """
+        params = {"symbol": symbol, "timeframe": timeframe, "from": ts_from, "to": ts_to}
+        res = self.client.query(query, parameters=params)
+        return res.result_rows
 
 

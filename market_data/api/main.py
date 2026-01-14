@@ -7,11 +7,17 @@ from pydantic import BaseModel
 
 from market_data.common.timeframes import tf_to_minutes
 from market_data.config.settings import load_settings
+from market_data.datasets import DatasetBuilder
 from market_data.storage.clickhouse_client import ClickHouseClient
+from market_data.export.export_dataset import _write_parquet  # reuse writer for deterministic settings
+import os
+import json
+from datetime import timezone as _tz
+import yaml
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Market Data API", version="0.1.0")
+app = FastAPI(title="Market Data API", version="0.2.0")
 settings = load_settings()
 ch = ClickHouseClient(
     host=settings.clickhouse.host,
@@ -35,6 +41,17 @@ class CandleOut(BaseModel):
     volume: float
     atr: Optional[float] = None
     volatility_regime: Optional[int] = None
+
+
+class DatasetOut(BaseModel):
+    dataset_id: str
+    symbol: str
+    timeframe: int
+    date_from: datetime
+    date_to: datetime
+    feature_set: str
+    checksum: str
+    created_at: datetime
 
 
 @app.get("/candles", response_model=List[CandleOut])
@@ -79,5 +96,79 @@ def get_candles(
         result.append(CandleOut(**co))
     return result
 
+
+@app.get("/datasets", response_model=List[DatasetOut])
+def list_datasets(symbol: Optional[str] = Query(None, description="Filter by symbol"), limit: int = 200):
+    rows = ch.list_datasets(symbol=symbol, limit=limit)
+    return [
+        DatasetOut(
+            dataset_id=r["dataset_id"],
+            symbol=r["symbol"],
+            timeframe=r["timeframe"],
+            date_from=r["date_from"],
+            date_to=r["date_to"],
+            feature_set=r["feature_set"],
+            checksum=r["checksum"],
+            created_at=r["created_at"],
+        )
+        for r in rows
+    ]
+
+
+@app.get("/datasets/{dataset_id}", response_model=DatasetOut)
+def get_dataset(dataset_id: str):
+    r = ch.get_dataset(dataset_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return DatasetOut(
+        dataset_id=r["dataset_id"],
+        symbol=r["symbol"],
+        timeframe=r["timeframe"],
+        date_from=r["date_from"],
+        date_to=r["date_to"],
+        feature_set=r["feature_set"],
+        checksum=r["checksum"],
+        created_at=r["created_at"],
+    )
+
+
+@app.get("/datasets/{dataset_id}/export")
+def export_dataset(dataset_id: str, format: str = "parquet"):
+    if format != "parquet":
+        raise HTTPException(status_code=400, detail="Only parquet format is supported")
+    meta = ch.get_dataset(dataset_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    feature_set = json.loads(meta["feature_set"])
+    builder = DatasetBuilder(settings, ch)
+    _, df_candles, df_features = builder.build(
+        symbol=meta["symbol"],
+        timeframe=f"{int(meta['timeframe'])}m",
+        date_from=meta["date_from"].astimezone(_tz.utc),
+        date_to=meta["date_to"].astimezone(_tz.utc),
+        feature_set=feature_set,
+        publish=False,
+    )
+    out_dir = os.path.join("data", "exports", dataset_id)
+    os.makedirs(out_dir, exist_ok=True)
+    _write_parquet(df_candles, os.path.join(out_dir, "candles.parquet"))
+    _write_parquet(df_features, os.path.join(out_dir, "features.parquet"))
+    with open(os.path.join(out_dir, "metadata.yaml"), "w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            {
+                "dataset_id": dataset_id,
+                "symbol": meta["symbol"],
+                "timeframe": int(meta["timeframe"]),
+                "date_from": meta["date_from"].isoformat(),
+                "date_to": meta["date_to"].isoformat(),
+                "feature_set": feature_set,
+                "checksum": meta["checksum"],
+                "created_at": meta["created_at"].isoformat(),
+                "format": "parquet",
+            },
+            f,
+            sort_keys=True,
+        )
+    return {"export_path": out_dir}
 
 

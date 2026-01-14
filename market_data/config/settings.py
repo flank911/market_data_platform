@@ -56,9 +56,16 @@ class FeatureThresholds:
 
 
 @dataclass(frozen=True)
+class QualityThresholds:
+    max_gap_pct: float
+    max_nan_feature_pct: float
+
+
+@dataclass(frozen=True)
 class AppSettings:
     exchange: str
     symbol: str
+    symbols: List[str]
     base_timeframe: str
     aggregate_timeframes: List[str]
     start_date_utc: datetime
@@ -67,12 +74,15 @@ class AppSettings:
     backoff_initial_s: float
     backoff_max_s: float
     feature_thresholds: FeatureThresholds
+    quality_thresholds: QualityThresholds
     clickhouse: ClickHouseConfig
 
 
 def load_settings() -> AppSettings:
     exchange = getenv("EXCHANGE", "binance")
     symbol = getenv("SYMBOL", "BTCUSDT")
+    symbols_raw = getenv("SYMBOLS", "BTCUSDT,ETHUSDT")
+    symbols = [s.strip() for s in symbols_raw.split(",") if s.strip()]
     base_timeframe = getenv("BASE_TIMEFRAME", "1m")
     aggregate_timeframes = getenv("AGG_TIMEFRAMES", "5m,15m,1h,4h,1d").split(",")
     aggregate_timeframes = [tf.strip() for tf in aggregate_timeframes if tf.strip()]
@@ -90,6 +100,11 @@ def load_settings() -> AppSettings:
         mid_pct=getenv_float("VOL_MID_ATR_PCT", 1.5),
     )
 
+    quality_thresholds = QualityThresholds(
+        max_gap_pct=getenv_float("QUALITY_MAX_GAP_PCT", 0.5),
+        max_nan_feature_pct=getenv_float("QUALITY_MAX_NAN_FEATURE_PCT", 0.5),
+    )
+
     ch = ClickHouseConfig(
         host=getenv("CLICKHOUSE_HOST", "clickhouse"),
         port=getenv_int("CLICKHOUSE_PORT", 8123),
@@ -102,6 +117,7 @@ def load_settings() -> AppSettings:
     return AppSettings(
         exchange=exchange,
         symbol=symbol,
+        symbols=symbols,
         base_timeframe=base_timeframe,
         aggregate_timeframes=aggregate_timeframes,
         start_date_utc=start_date_utc,
@@ -110,6 +126,7 @@ def load_settings() -> AppSettings:
         backoff_initial_s=backoff_initial_s,
         backoff_max_s=backoff_max_s,
         feature_thresholds=feature_thresholds,
+        quality_thresholds=quality_thresholds,
         clickhouse=ch,
     )
 

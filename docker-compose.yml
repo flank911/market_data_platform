@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: mdp_clickhouse
+    environment:
+      - CLICKHOUSE_DB=default
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - ch_data:/var/lib/clickhouse
+      - ch_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: mdp_app
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - RUN_PIPELINE=0
+    command: ["uvicorn", "market_data.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: mdp_worker
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    entrypoint: ["python", "-m", "market_data.scripts.run_mvp"]
+    restart: "no"
+
+volumes:
+  ch_data:
+  ch_logs:
+
+

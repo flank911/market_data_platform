@@ -71,3 +71,4 @@ class BinanceFetcher:
                 await asyncio.sleep(min_sleep_s)
 
 
+

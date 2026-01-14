@@ -48,3 +48,4 @@ def aggregate_from_1m(candles_1m: Iterable[Candle], target_minutes: int) -> List
     return result
 
 
+

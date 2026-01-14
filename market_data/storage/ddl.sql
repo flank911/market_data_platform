@@ -18,3 +18,4 @@ ORDER BY (symbol, timeframe, ts)
 SETTINGS index_granularity = 8192;
 
 
+

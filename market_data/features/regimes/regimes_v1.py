@@ -31,3 +31,4 @@ def compute_trend_regime_v1(df: pd.DataFrame, *, trend_strength_col: str, thr: f
     return out.rename("trend_regime_v1")
 
 
+

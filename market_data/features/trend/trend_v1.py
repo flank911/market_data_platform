@@ -21,3 +21,4 @@ def compute_trend_strength_ema_diff_v1(
     return strength.rename(f"trend_strength_ema_{short_span}_{long_span}_v1")
 
 
+

@@ -71,11 +71,23 @@ class AppSettings:
     start_date_utc: datetime
     end_date_utc: datetime
     binance_base_url: str
+    binance_futures_base_url: str
     backoff_initial_s: float
     backoff_max_s: float
     feature_thresholds: FeatureThresholds
     quality_thresholds: QualityThresholds
     clickhouse: ClickHouseConfig
+    s3: "S3Config"
+
+
+@dataclass(frozen=True)
+class S3Config:
+    endpoint_url: str
+    bucket: str
+    access_key: str
+    secret_key: str
+    region: str
+    prefix: str
 
 
 def load_settings() -> AppSettings:
@@ -92,6 +104,7 @@ def load_settings() -> AppSettings:
     end_date_utc = parse_utc_datetime(getenv("END_DATE_UTC", datetime.utcnow().strftime("%Y-%m-%d")), default_start)
 
     binance_base_url = getenv("BINANCE_BASE_URL", "https://api.binance.com")
+    binance_futures_base_url = getenv("BINANCE_FUTURES_BASE_URL", "https://fapi.binance.com")
     backoff_initial_s = getenv_float("BACKOFF_INITIAL_S", 0.5)
     backoff_max_s = getenv_float("BACKOFF_MAX_S", 8.0)
 
@@ -114,6 +127,15 @@ def load_settings() -> AppSettings:
         secure=getenv_bool("CLICKHOUSE_SECURE", False),
     )
 
+    s3 = S3Config(
+        endpoint_url=getenv("S3_ENDPOINT_URL", ""),
+        bucket=getenv("S3_BUCKET", "market-data-datasets"),
+        access_key=getenv("S3_ACCESS_KEY", ""),
+        secret_key=getenv("S3_SECRET_KEY", ""),
+        region=getenv("S3_REGION", "us-east-1"),
+        prefix=getenv("S3_PREFIX", "datasets"),
+    )
+
     return AppSettings(
         exchange=exchange,
         symbol=symbol,
@@ -123,11 +145,13 @@ def load_settings() -> AppSettings:
         start_date_utc=start_date_utc,
         end_date_utc=end_date_utc,
         binance_base_url=binance_base_url,
+        binance_futures_base_url=binance_futures_base_url,
         backoff_initial_s=backoff_initial_s,
         backoff_max_s=backoff_max_s,
         feature_thresholds=feature_thresholds,
         quality_thresholds=quality_thresholds,
         clickhouse=ch,
+        s3=s3,
     )
 
 

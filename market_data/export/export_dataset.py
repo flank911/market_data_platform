@@ -13,6 +13,7 @@ import yaml
 
 from market_data.config.settings import load_settings
 from market_data.datasets import DatasetBuilder
+from market_data.export.cold_storage import upload_dataset_to_s3
 from market_data.storage.clickhouse_client import ClickHouseClient
 
 
@@ -26,6 +27,7 @@ def main() -> None:
     parser.add_argument("--dataset-id", required=True, help="Dataset ID")
     parser.add_argument("--format", default="parquet", choices=["parquet"], help="Export format")
     parser.add_argument("--out-dir", default="data/exports", help="Output base directory")
+    parser.add_argument("--upload-s3", action="store_true", help="Upload exported dataset to S3")
     args = parser.parse_args()
 
     settings = load_settings()
@@ -64,6 +66,7 @@ def main() -> None:
     _write_parquet(df_candles, os.path.join(ds_dir, "candles.parquet"))
     _write_parquet(df_features, os.path.join(ds_dir, "features.parquet"))
     # Write metadata
+    lineage = ch.list_dataset_lineage(args.dataset_id)
     metadata = {
         "dataset_id": args.dataset_id,
         "symbol": symbol,
@@ -75,10 +78,14 @@ def main() -> None:
         "created_at": meta_row["created_at"].isoformat(),
         "format": args.format,
         "contract": "dataset is immutable; features versioned; derived from ClickHouse OHLCV",
+        "lineage": lineage,
     }
     with open(os.path.join(ds_dir, "metadata.yaml"), "w", encoding="utf-8") as f:
         yaml.safe_dump(metadata, f, sort_keys=True)
 
+    if args.upload_s3:
+        uri = upload_dataset_to_s3(s3=settings.s3, dataset_id=args.dataset_id, base_dir=args.out_dir)
+        print(f"Uploaded dataset to: {uri}")
     print(f"Exported dataset to: {ds_dir}")
 
 

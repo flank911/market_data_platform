@@ -143,6 +143,98 @@ class ClickHouseClient:
             "created_at": r[7],
         }
 
+    def insert_dataset_lineage(
+        self,
+        *,
+        dataset_id: str,
+        source_type: str,
+        source_id: str,
+        created_at: datetime,
+    ) -> None:
+        self.client.insert(
+            "dataset_lineage",
+            [(dataset_id, source_type, source_id, created_at)],
+            column_names=["dataset_id", "source_type", "source_id", "created_at"],
+            settings={"async_insert": 0, "wait_for_async_insert": 1},
+        )
+
+    def list_dataset_lineage(self, dataset_id: str) -> List[Dict[str, object]]:
+        query = """
+            SELECT dataset_id, source_type, source_id, created_at
+            FROM dataset_lineage
+            WHERE dataset_id = {dataset_id:String}
+            ORDER BY created_at ASC
+        """
+        res = self.client.query(query, parameters={"dataset_id": dataset_id})
+        return [
+            {"dataset_id": r[0], "source_type": r[1], "source_id": r[2], "created_at": r[3]}
+            for r in res.result_rows
+        ]
+
+    def insert_regime_model(
+        self,
+        *,
+        model_id: str,
+        dataset_id: str,
+        model_type: str,
+        features_serialized: str,
+        params_serialized: str,
+        checksum: str,
+        created_at: datetime,
+    ) -> None:
+        self.client.insert(
+            "regime_models",
+            [
+                (
+                    model_id,
+                    dataset_id,
+                    model_type,
+                    features_serialized,
+                    params_serialized,
+                    checksum,
+                    created_at,
+                )
+            ],
+            column_names=[
+                "model_id",
+                "dataset_id",
+                "model_type",
+                "features",
+                "params",
+                "checksum",
+                "created_at",
+            ],
+            settings={"async_insert": 0, "wait_for_async_insert": 1},
+        )
+
+    def list_regime_models(self, *, dataset_id: Optional[str] = None, limit: int = 200) -> List[Dict[str, object]]:
+        where = ""
+        params: Dict[str, object] = {}
+        if dataset_id:
+            where = "WHERE dataset_id = {dataset_id:String}"
+            params["dataset_id"] = dataset_id
+        query = f"""
+            SELECT model_id, dataset_id, model_type, features, params, checksum, created_at
+            FROM regime_models
+            {where}
+            ORDER BY created_at DESC
+            LIMIT {{limit:Int32}}
+        """
+        params["limit"] = int(limit)
+        res = self.client.query(query, parameters=params)
+        return [
+            {
+                "model_id": r[0],
+                "dataset_id": r[1],
+                "model_type": r[2],
+                "features": r[3],
+                "params": r[4],
+                "checksum": r[5],
+                "created_at": r[6],
+            }
+            for r in res.result_rows
+        ]
+
     def _rows_from_candles(self, candles: Sequence[Candle]) -> List[Tuple]:
         rows: List[Tuple] = []
         for c in candles:
@@ -162,6 +254,59 @@ class ClickHouseClient:
                 )
             )
         return rows
+
+    def insert_funding_rates(self, rows: Sequence[Tuple], *, chunk_size: int = 10000) -> int:
+        if not rows:
+            return 0
+        inserted = 0
+        for i in range(0, len(rows), chunk_size):
+            chunk = rows[i : i + chunk_size]
+            self.client.insert(
+                "funding_rates",
+                chunk,
+                column_names=["symbol", "exchange", "timeframe", "ts", "funding_rate"],
+                settings={"async_insert": 0, "wait_for_async_insert": 1},
+            )
+            inserted += len(chunk)
+        return inserted
+
+    def insert_open_interest(self, rows: Sequence[Tuple], *, chunk_size: int = 10000) -> int:
+        if not rows:
+            return 0
+        inserted = 0
+        for i in range(0, len(rows), chunk_size):
+            chunk = rows[i : i + chunk_size]
+            self.client.insert(
+                "open_interest",
+                chunk,
+                column_names=["symbol", "exchange", "timeframe", "ts", "open_interest"],
+                settings={"async_insert": 0, "wait_for_async_insert": 1},
+            )
+            inserted += len(chunk)
+        return inserted
+
+    def insert_liquidations(self, rows: Sequence[Tuple], *, chunk_size: int = 10000) -> int:
+        if not rows:
+            return 0
+        inserted = 0
+        for i in range(0, len(rows), chunk_size):
+            chunk = rows[i : i + chunk_size]
+            self.client.insert(
+                "liquidations",
+                chunk,
+                column_names=[
+                    "symbol",
+                    "exchange",
+                    "timeframe",
+                    "ts",
+                    "liquidation_qty",
+                    "liquidation_notional",
+                    "liquidation_count",
+                ],
+                settings={"async_insert": 0, "wait_for_async_insert": 1},
+            )
+            inserted += len(chunk)
+        return inserted
 
     def select_existing_timestamps(
         self,
@@ -277,6 +422,69 @@ class ClickHouseClient:
             SELECT
               ts, open, high, low, close, volume
             FROM market_candles
+            WHERE symbol = {symbol:String}
+              AND timeframe = {timeframe:UInt16}
+              AND ts >= {from:DateTime}
+              AND ts <= {to:DateTime}
+            ORDER BY ts ASC
+        """
+        params = {"symbol": symbol, "timeframe": timeframe, "from": ts_from, "to": ts_to}
+        res = self.client.query(query, parameters=params)
+        return res.result_rows
+
+    def select_funding_rates(
+        self,
+        *,
+        symbol: str,
+        timeframe: int,
+        ts_from: datetime,
+        ts_to: datetime,
+    ) -> List[Tuple]:
+        query = """
+            SELECT ts, funding_rate
+            FROM funding_rates
+            WHERE symbol = {symbol:String}
+              AND timeframe = {timeframe:UInt16}
+              AND ts >= {from:DateTime}
+              AND ts <= {to:DateTime}
+            ORDER BY ts ASC
+        """
+        params = {"symbol": symbol, "timeframe": timeframe, "from": ts_from, "to": ts_to}
+        res = self.client.query(query, parameters=params)
+        return res.result_rows
+
+    def select_open_interest(
+        self,
+        *,
+        symbol: str,
+        timeframe: int,
+        ts_from: datetime,
+        ts_to: datetime,
+    ) -> List[Tuple]:
+        query = """
+            SELECT ts, open_interest
+            FROM open_interest
+            WHERE symbol = {symbol:String}
+              AND timeframe = {timeframe:UInt16}
+              AND ts >= {from:DateTime}
+              AND ts <= {to:DateTime}
+            ORDER BY ts ASC
+        """
+        params = {"symbol": symbol, "timeframe": timeframe, "from": ts_from, "to": ts_to}
+        res = self.client.query(query, parameters=params)
+        return res.result_rows
+
+    def select_liquidations(
+        self,
+        *,
+        symbol: str,
+        timeframe: int,
+        ts_from: datetime,
+        ts_to: datetime,
+    ) -> List[Tuple]:
+        query = """
+            SELECT ts, liquidation_qty, liquidation_notional, liquidation_count
+            FROM liquidations
             WHERE symbol = {symbol:String}
               AND timeframe = {timeframe:UInt16}
               AND ts >= {from:DateTime}

@@ -27,3 +27,4 @@ def compute_atr_v1(df: pd.DataFrame, window: int = 14) -> pd.Series:
     return out
 
 
+

@@ -15,3 +15,4 @@ def compute_rolling_volatility_v1(df: pd.DataFrame, window: int = 30) -> pd.Seri
     return vol.rename(f"volatility_roll_{window}_v1")
 
 
+

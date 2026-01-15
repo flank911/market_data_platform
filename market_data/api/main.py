@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from market_data.common.timeframes import tf_to_minutes
 from market_data.config.settings import load_settings
 from market_data.datasets import DatasetBuilder
+from market_data.features.registry import feature_registry
+from market_data.quality.reports import quality_report
 from market_data.storage.clickhouse_client import ClickHouseClient
 from market_data.export.export_dataset import _write_parquet  # reuse writer for deterministic settings
 import os
@@ -52,6 +54,26 @@ class DatasetOut(BaseModel):
     feature_set: str
     checksum: str
     created_at: datetime
+
+
+class RegimeModelOut(BaseModel):
+    model_id: str
+    dataset_id: str
+    model_type: str
+    features: str
+    params: str
+    checksum: str
+    created_at: datetime
+
+
+class DatasetStatsOut(BaseModel):
+    dataset_id: str
+    candle_count: int
+    feature_count: int
+    missing_pct: float
+    nan_pct: Dict[str, float]
+    date_from: datetime
+    date_to: datetime
 
 
 @app.get("/candles", response_model=List[CandleOut])
@@ -170,5 +192,60 @@ def export_dataset(dataset_id: str, format: str = "parquet"):
             sort_keys=True,
         )
     return {"export_path": out_dir}
+
+
+@app.get("/features")
+def list_features():
+    return feature_registry()
+
+
+@app.get("/regimes", response_model=List[RegimeModelOut])
+def list_regimes(dataset_id: Optional[str] = Query(None, description="Filter by dataset_id"), limit: int = 200):
+    rows = ch.list_regime_models(dataset_id=dataset_id, limit=limit)
+    return [
+        RegimeModelOut(
+            model_id=r["model_id"],
+            dataset_id=r["dataset_id"],
+            model_type=r["model_type"],
+            features=r["features"],
+            params=r["params"],
+            checksum=r["checksum"],
+            created_at=r["created_at"],
+        )
+        for r in rows
+    ]
+
+
+@app.get("/datasets/{dataset_id}/stats", response_model=DatasetStatsOut)
+def dataset_stats(dataset_id: str):
+    meta = ch.get_dataset(dataset_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    feature_set = json.loads(meta["feature_set"])
+    builder = DatasetBuilder(settings, ch)
+    _, df_candles, df_features = builder.build(
+        symbol=meta["symbol"],
+        timeframe=f"{int(meta['timeframe'])}m",
+        date_from=meta["date_from"].astimezone(_tz.utc),
+        date_to=meta["date_to"].astimezone(_tz.utc),
+        feature_set=feature_set,
+        publish=False,
+    )
+    report = quality_report(
+        df_candles,
+        df_features,
+        ts_from=meta["date_from"].astimezone(_tz.utc),
+        ts_to=meta["date_to"].astimezone(_tz.utc),
+        timeframe_min=int(meta["timeframe"]),
+    )
+    return DatasetStatsOut(
+        dataset_id=dataset_id,
+        candle_count=int(len(df_candles)),
+        feature_count=int(len(df_features.columns)),
+        missing_pct=float(report["missing_pct"]),
+        nan_pct=report["nan_pct"],
+        date_from=meta["date_from"],
+        date_to=meta["date_to"],
+    )
 
 

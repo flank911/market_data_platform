@@ -13,6 +13,7 @@ class BinanceFetcher:
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
         self.base_url = settings.binance_base_url.rstrip("/")
+        self.futures_base_url = settings.binance_futures_base_url.rstrip("/")
 
     async def _request_with_backoff(
         self,
@@ -69,6 +70,87 @@ class BinanceFetcher:
                 else:
                     current = last_open_time + 60_000
                 await asyncio.sleep(min_sleep_s)
+
+    async def fetch_funding_rates(
+        self,
+        symbol: str,
+        start_ms: int,
+        end_ms: int,
+        limit: int = 1000,
+    ) -> List[Dict[str, object]]:
+        url = f"{self.futures_base_url}/fapi/v1/fundingRate"
+        async with httpx.AsyncClient() as client:
+            params = {
+                "symbol": symbol,
+                "startTime": str(start_ms),
+                "endTime": str(end_ms),
+                "limit": str(limit),
+            }
+            data = await self._request_with_backoff(client, url, params)
+            return [
+                {
+                    "fundingRate": float(r["fundingRate"]),
+                    "fundingTime": int(r["fundingTime"]),
+                }
+                for r in data
+            ]
+
+    async def fetch_open_interest_hist(
+        self,
+        symbol: str,
+        period: str,
+        start_ms: int,
+        end_ms: int,
+        limit: int = 500,
+    ) -> List[Dict[str, object]]:
+        url = f"{self.futures_base_url}/futures/data/openInterestHist"
+        async with httpx.AsyncClient() as client:
+            params = {
+                "symbol": symbol,
+                "period": period,
+                "startTime": str(start_ms),
+                "endTime": str(end_ms),
+                "limit": str(limit),
+            }
+            data = await self._request_with_backoff(client, url, params)
+            return [
+                {
+                    "sumOpenInterest": float(r["sumOpenInterest"]),
+                    "timestamp": int(r["timestamp"]),
+                }
+                for r in data
+            ]
+
+    async def fetch_liquidations(
+        self,
+        symbol: str,
+        start_ms: int,
+        end_ms: int,
+        limit: int = 1000,
+    ) -> List[Dict[str, object]]:
+        url = f"{self.futures_base_url}/fapi/v1/allForceOrders"
+        async with httpx.AsyncClient() as client:
+            params = {
+                "symbol": symbol,
+                "startTime": str(start_ms),
+                "endTime": str(end_ms),
+                "limit": str(limit),
+            }
+            data = await self._request_with_backoff(client, url, params)
+            out: List[Dict[str, object]] = []
+            for r in data:
+                price = float(r.get("price", 0.0))
+                qty = float(r.get("origQty", r.get("quantity", 0.0)))
+                out.append(
+                    {
+                        "time": int(r["time"]),
+                        "price": price,
+                        "qty": qty,
+                        "side": r.get("side", ""),
+                        "notional": price * qty,
+                    }
+                )
+            return out
 
 
 
